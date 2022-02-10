@@ -9,7 +9,7 @@ import numpy as np
 import gym
 import roboschool
 
-from PPO import PPO
+from PPO import PPO   
 
 ################################### Training ###################################
 def train():
