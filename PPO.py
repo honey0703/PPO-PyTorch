@@ -1,7 +1,22 @@
+import abc
 import torch
 import torch.nn as nn
 from torch.distributions import MultivariateNormal
 from torch.distributions import Categorical
+
+# ################################# ABC ###################################
+# class Network(abc.ABCMeta):
+#     @abc.abstractmethod
+#     def __init__(self):
+#         return NotImplemented
+
+#     @abc.abstractmethod
+#     def select_action(self):
+#         return NotImplemented
+
+#     @abc.abstractmethod
+#     def update(self):
+#         return NotImplemented
 
 ################################## set device ##################################
 print("============================================================================================")
@@ -32,42 +47,79 @@ class RolloutBuffer:
         del self.rewards[:]
         del self.is_terminals[:]
 
+class ActorNet(nn.Module):
+    def __init__(self, state_dim, action_dim):
+        super(ActorNet, self).__init__()
+        self.hidden1 = nn.Linear(state_dim, 64)
+        self.hidden2 = nn.Linear(64,64)
+        self.hidden3 = nn.Linear(64,action_dim)
+        self.activation = nn.Tanh()
+    
+    def forward(self, state):
+        actor = self.hidden1(state)
+        actor = self.activation(actor)
+        actor = self.hidden2(actor)
+        actor = self.activation(actor)
+        actor = self.hidden3(actor)
+        return actor
+
+class CriticNet(nn.Module):
+    def __init__(self, state_dim, action_dim):
+        super(CriticNet, self).__init__()
+        self.hidden1 = nn.Linear(state_dim, 64)
+        self.hidden2 = nn.Linear(64,64)
+        self.hidden3 = nn.Linear(64,1)
+        self.activation = nn.Tanh()
+    
+    def forward(self, state):
+        value = self.hidden1(state)
+        value = self.activation(value)
+        value = self.hidden2(value)
+        value = self.activation(value)
+        value = self.hidden3(value)
+        return value
+
 
 class ActorCritic(nn.Module):
     def __init__(self, state_dim, action_dim, has_continuous_action_space, action_std_init):
         super(ActorCritic, self).__init__()
 
         self.has_continuous_action_space = has_continuous_action_space
+        self.net_ActorNet = ActorNet(state_dim, action_dim)
+        self.net_CriticNet = CriticNet(state_dim, action_dim)
         
         if has_continuous_action_space:
             self.action_dim = action_dim
             self.action_var = torch.full((action_dim,), action_std_init * action_std_init).to(device)
-        # actor
-        if has_continuous_action_space :
-            self.actor = nn.Sequential(
-                            nn.Linear(state_dim, 64),
-                            nn.Tanh(),
-                            nn.Linear(64, 64),
-                            nn.Tanh(),
-                            nn.Linear(64, action_dim),
-                        )
-        else:
-            self.actor = nn.Sequential(
-                            nn.Linear(state_dim, 64),
-                            nn.Tanh(),
-                            nn.Linear(64, 64),
-                            nn.Tanh(),
-                            nn.Linear(64, action_dim),
-                            nn.Softmax(dim=-1)
-                        )
-        # critic
-        self.critic = nn.Sequential(
-                        nn.Linear(state_dim, 64),
-                        nn.Tanh(),
-                        nn.Linear(64, 64),
-                        nn.Tanh(),
-                        nn.Linear(64, 1)
-                    )
+            
+#         # actor
+#         if has_continuous_action_space :
+#             self.actor = nn.Sequential(
+#                             nn.Linear(state_dim, 64),
+#                             nn.Tanh(),
+#                             nn.Linear(64, 64),
+#                             nn.Tanh(),
+#                             nn.Linear(64, action_dim),
+#                         )
+            
+            
+#         else:
+#             self.actor = nn.Sequential(
+#                             nn.Linear(state_dim, 64),
+#                             nn.Tanh(),
+#                             nn.Linear(64, 64),
+#                             nn.Tanh(),
+#                             nn.Linear(64, action_dim),
+#                             nn.Softmax(dim=-1)
+#                         )
+#         # critic
+#         self.critic = nn.Sequential(
+#                         nn.Linear(state_dim, 64),
+#                         nn.Tanh(),
+#                         nn.Linear(64, 64),
+#                         nn.Tanh(),
+#                         nn.Linear(64, 1)
+#                     )
         
     def set_action_std(self, new_action_std):
         if self.has_continuous_action_space:
@@ -76,13 +128,14 @@ class ActorCritic(nn.Module):
             print("--------------------------------------------------------------------------------------------")
             print("WARNING : Calling ActorCritic::set_action_std() on discrete action space policy")
             print("--------------------------------------------------------------------------------------------")
-
-    def forward(self):
-        raise NotImplementedError
+    
+    # def forward(self):
+    #     raise NotImplementedError
     
     def act(self, state):
         if self.has_continuous_action_space:
-            action_mean = self.actor(state)
+            # action_mean = self.actor(state)
+            action_mean = self.net_ActorNet.forward(state)
             cov_mat = torch.diag(self.action_var).unsqueeze(dim=0)
             dist = MultivariateNormal(action_mean, cov_mat)
         else:
@@ -97,7 +150,8 @@ class ActorCritic(nn.Module):
     def evaluate(self, state, action):
 
         if self.has_continuous_action_space:
-            action_mean = self.actor(state)
+            # action_mean = self.actor(state)
+            action_mean = self.net_ActorNet.forward(state)
             
             action_var = self.action_var.expand_as(action_mean)
             cov_mat = torch.diag_embed(action_var).to(device)
@@ -107,16 +161,17 @@ class ActorCritic(nn.Module):
             if self.action_dim == 1:
                 action = action.reshape(-1, self.action_dim)
         else:
-            action_probs = self.actor(state)
+            action_probs = self.net_ActorNet(state)
             dist = Categorical(action_probs)
         action_logprobs = dist.log_prob(action)
         dist_entropy = dist.entropy()
-        state_values = self.critic(state)
+        # state_values = self.critic(state)
+        state_values = self.net_CriticNet.forward(state)
         
         return action_logprobs, state_values, dist_entropy
 
 
-class PPO:
+class PPO():
     def __init__(self, state_dim, action_dim, lr_actor, lr_critic, gamma, K_epochs, eps_clip, has_continuous_action_space, action_std_init=0.6):
 
         self.has_continuous_action_space = has_continuous_action_space
@@ -131,10 +186,18 @@ class PPO:
         self.buffer = RolloutBuffer()
 
         self.policy = ActorCritic(state_dim, action_dim, has_continuous_action_space, action_std_init).to(device)
+        
+        self.net_ActorNet = ActorNet(state_dim, action_dim)
+        self.net_CriticNet = CriticNet(state_dim, action_dim)
+        
         self.optimizer = torch.optim.Adam([
-                        {'params': self.policy.actor.parameters(), 'lr': lr_actor},
-                        {'params': self.policy.critic.parameters(), 'lr': lr_critic}
+                        {'params': self.net_ActorNet.parameters(), 'lr': lr_actor},
+                        {'params': self.net_CriticNet.parameters(), 'lr': lr_critic}
                     ])
+        # self.optimizer = torch.optim.Adam([
+        #                 {'params': self.policy.actor.parameters(), 'lr': lr_actor},
+        #                 {'params': self.policy.critic.parameters(), 'lr': lr_critic}
+        #             ])
 
         self.policy_old = ActorCritic(state_dim, action_dim, has_continuous_action_space, action_std_init).to(device)
         self.policy_old.load_state_dict(self.policy.state_dict())
